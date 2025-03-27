@@ -1,0 +1,793 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Line } from 'react-chartjs-2';
+import { Chart, LineElement, CategoryScale, LinearScale, PointElement } from 'chart.js';
+
+// Register Chart.js components
+Chart.register(LineElement, CategoryScale, LinearScale, PointElement);
+
+/* ------------------------- Global Helpers ------------------------- */
+// Returns a standard normal random number using Box-Muller transform.
+const randomNormal = () => {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+};
+
+// Random company name generator.
+const getRandomCompanyName = () => {
+  const names = [
+    "Acme Corp", "Globex Corporation", "Initech", "Umbrella Corporation",
+    "Stark Industries", "Wayne Enterprises", "Soylent Corp", "Cyberdyne Systems"
+  ];
+  return names[Math.floor(Math.random() * names.length)];
+};
+
+// Format trading date given a start date and trading days.
+const formatTradingDateFrom = (startDate, tradingDays) => {
+  const currentDate = new Date(startDate);
+  const calendarOffset = Math.round(tradingDays * (365 / 252));
+  currentDate.setDate(startDate.getDate() + calendarOffset);
+  return currentDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+// Compute quarter label (e.g., "2025 Q1") from a Date.
+const getQuarterLabel = (date) => {
+  const month = date.getMonth(); // 0-based
+  const quarter = month < 3 ? "Q1" : month < 6 ? "Q2" : month < 9 ? "Q3" : "Q4";
+  return `${date.getFullYear()} ${quarter}`;
+};
+
+// Returns weighted random Brownian variables:
+// 80% chance for realistic slow-growth (drift between 0.0005 and 0.0015; volatility between 0.005 and 0.01)
+// 20% chance for crypto-like volatile values (drift between -0.05 and 0.05; volatility between 0.1 and 0.3)
+const randomBrownianVariables = () => {
+  if (Math.random() < 0.2) {
+    // Crypto-like
+    return {
+      drift: Math.random() * 0.1 - 0.05,
+      volatility: Math.random() * 0.2 + 0.1
+    };
+  } else {
+    // Realistic slow growth
+    return {
+      drift: Math.random() * 0.001 + 0.0005,
+      volatility: Math.random() * 0.005 + 0.005
+    };
+  }
+};
+
+/* ------------------------- Theme Helpers ------------------------- */
+const getBoxStyle = (darkMode) => ({
+  border: darkMode ? '1px solid #444' : '1px solid #ddd',
+  padding: '10px',
+  borderRadius: '5px',
+  backgroundColor: darkMode ? '#333' : '#f9f9f9',
+  color: darkMode ? '#eee' : '#333',
+  marginTop: '20px'
+});
+const getPageStyle = (darkMode) => ({
+  backgroundColor: darkMode ? '#222' : '#fff',
+  color: darkMode ? '#eee' : '#333',
+  minHeight: '100vh'
+});
+
+/* ------------------------- Legend ------------------------- */
+const Legend = ({ darkMode }) => (
+  <div style={{ ...getBoxStyle(darkMode), fontSize: '0.9rem' }}>
+    <h3>Legend</h3>
+    <p><strong>Drift (μ):</strong> The expected daily rate of change.</p>
+    <p><strong>Volatility (σ):</strong> The standard deviation of daily returns.</p>
+    <p><strong>Random Shock (Z):</strong> A daily random value from a normal distribution.</p>
+    <p><strong>Time Step (dt):</strong> Each iteration is one trading day.</p>
+    <p>
+      <strong>Formula:</strong><br />
+      S(t+1) = S(t) × exp[(μ − 0.5σ²) × dt + σ × √dt × Z]
+    </p>
+  </div>
+);
+
+/* ------------------- SimulationParamDisplay ------------------- */
+const SimulationParamDisplay = ({ simulationParams, lastShock, variableMode, revealed, onReveal, darkMode }) => {
+  const displayValue = (val) =>
+    (variableMode === "random" && !revealed) ? "???" : (val === '-' ? '-' : val + '%');
+  const displayShock = (val) =>
+    (variableMode === "random" && !revealed) ? "???" : (val.toFixed ? val.toFixed(4) : val);
+  const { drift, volatility, dt } = simulationParams || {};
+  return (
+    <div style={getBoxStyle(darkMode)}>
+      <h3>Brownian Variables</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap' }}>
+        <div>
+          <strong>Daily Drift:</strong>
+          <p>{displayValue(drift)}</p>
+        </div>
+        <div>
+          <strong>Daily Volatility:</strong>
+          <p>{displayValue(volatility)}</p>
+        </div>
+        <div>
+          <strong>Last Random Shock (Z):</strong>
+          <p>{displayShock(lastShock)}</p>
+        </div>
+        <div>
+          <strong>Time Step (dt):</strong>
+          <p>{dt || '-'}</p>
+        </div>
+      </div>
+      {variableMode === "random" && !revealed && (
+        <div style={{ textAlign: 'center', marginTop: '10px' }}>
+          <button onClick={onReveal}>Reveal Variables</button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ------------------------- Dashboard (Stock Stats) ------------------------- */
+const Dashboard = ({ data, darkMode }) => {
+  if (!data || data.length === 0) return null;
+  const sim = data[0];
+  const starting = sim[0];
+  const current = sim[sim.length - 1];
+  const highest = Math.max(...sim);
+  const lowest = Math.min(...sim);
+  const percentageChange = (((current - starting) / starting) * 100).toFixed(2);
+  return (
+    <div style={getBoxStyle(darkMode)}>
+      <h3>Stock Stats</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap' }}>
+        <div><strong>Current Price:</strong><p>${current.toFixed(2)}</p></div>
+        <div><strong>Highest Price:</strong><p>${highest.toFixed(2)}</p></div>
+        <div><strong>Lowest Price:</strong><p>${lowest.toFixed(2)}</p></div>
+        <div><strong>% Change:</strong><p>{percentageChange}%</p></div>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------- SimulationsLegend ------------------------- */
+const SimulationsLegend = ({ displayedSimData, darkMode, defaultColors }) => (
+  <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap' }}>
+    {displayedSimData.map((sim, index) => {
+      const currentPrice = sim[sim.length - 1];
+      const startingPrice = sim[0];
+      const percentReturn = (((currentPrice - startingPrice) / startingPrice) * 100).toFixed(2);
+      const returnColor = percentReturn >= 0 ? 'green' : 'red';
+      return (
+        <div key={index} style={{ display: 'flex', alignItems: 'center', marginRight: '20px', marginBottom: '10px' }}>
+          <div style={{ width: '15px', height: '15px', backgroundColor: defaultColors[index] || 'black', marginRight: '5px' }} />
+          <div style={{ fontSize: '0.9rem', color: darkMode ? '#eee' : '#333' }}>
+            Sim {index + 1}: ${currentPrice.toFixed(2)} (<span style={{ color: returnColor }}>{percentReturn}%</span>)
+          </div>
+        </div>
+      );
+    })}
+  </div>
+);
+
+/* ------------------------- TradingSimulation ------------------------- */
+const TradingSimulation = ({
+  onUpdateData,
+  onSimulationParams,
+  onUpdateLastShock,
+  variableMode,
+  onVariableModeChange,
+  darkMode
+}) => {
+  // State declarations.
+  const [simData, setSimData] = useState([[100]]);
+  const [time, setTime] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false);
+  const intervalRef = useRef(null);
+
+  const [speed, setSpeed] = useState(1);
+  const [drift, setDrift] = useState(0);
+  const [volatility, setVolatility] = useState(0);
+  const dt = 1;
+
+  // Updated custom defaults (as strings) for custom input.
+  const [customDrift, setCustomDrift] = useState("2.0");      // 2% drift
+  const [customVolatility, setCustomVolatility] = useState("20.0"); // 20% volatility
+  const [numSims, setNumSims] = useState(1);
+  const [timeFrame, setTimeFrame] = useState('ALL'); // Default view: ALL
+
+  // Fixed start date for quarter labels.
+  const [startDate, setStartDate] = useState(new Date('2025-01-01'));
+  const [companyName, setCompanyName] = useState(getRandomCompanyName());
+
+  // Simulation visibility.
+  const [visibleSims, setVisibleSims] = useState(Array(numSims).fill(true));
+  useEffect(() => {
+    setVisibleSims(Array(numSims).fill(true));
+  }, [numSims]);
+
+  // Event markers.
+  const [eventMarkers, setEventMarkers] = useState([]);
+
+  // Recurring event states.
+  // Default to random quarterly events.
+  const [showRecurringEventForm, setShowRecurringEventForm] = useState(false);
+  const [recurringEventConfig, setRecurringEventConfig] = useState({
+    mode: "random",
+    frequencies: { '1Q': true, '1Y': false, '5Y': false },
+    customDrift: "2.0",
+    customVolatility: "20.0"
+  });
+  const [recurringEventMode, setRecurringEventMode] = useState("random");
+  const [recurringFrequencies, setRecurringFrequencies] = useState({ '1Q': true, '1Y': false, '5Y': false });
+  const [recurringCustomDrift, setRecurringCustomDrift] = useState("2.0");
+  const [recurringCustomVolatility, setRecurringCustomVolatility] = useState("20.0");
+
+  const chartContainerRef = useRef(null);
+  const chartRef = useRef(null);
+
+  const defaultColors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'magenta', 'teal'];
+
+  // Limit simulation history to 1260 days (5 years) to prevent memory issues.
+  const HISTORY_LIMIT = 1260;
+  useEffect(() => {
+    setSimData(prevData =>
+      prevData.map(sim => (sim.length > HISTORY_LIMIT ? sim.slice(sim.length - HISTORY_LIMIT) : sim))
+    );
+  }, [time]);
+
+  // Compute "Days until next Earnings Call" based on quarterly events (every 63 days).
+  const nextEarningsCallDays = recurringEventConfig && recurringEventConfig.frequencies['1Q']
+    ? Math.max(0, (Math.ceil(time / 63) * 63) - time)
+    : null;
+
+  // Generate random variables using a weighted selection.
+  const getRandomVariables = () => randomBrownianVariables();
+
+  // Use weighted random variables for random events.
+  const handleRandomEvent = () => {
+    const { drift: newDrift, volatility: newVolatility } = getRandomVariables();
+    setDrift(newDrift);
+    setVolatility(newVolatility);
+    onSimulationParams?.({
+      drift: (newDrift * 100).toFixed(3),
+      volatility: (newVolatility * 100).toFixed(3),
+      dt
+    });
+    setEventMarkers(prev => [...prev, { time, drift: newDrift }]);
+  };
+
+  // "Create Event" handler: switch to custom mode.
+  const handleCreateEvent = () => {
+    onVariableModeChange("custom");
+  };
+
+  // Start simulation.
+  const startSimulation = () => {
+    if (!hasStarted) {
+      let newDrift, newVolatility;
+      if (variableMode === "custom") {
+        newDrift = parseFloat(customDrift) / 100;
+        newVolatility = parseFloat(customVolatility) / 100;
+      } else {
+        const vars = getRandomVariables();
+        newDrift = vars.drift;
+        newVolatility = vars.volatility;
+      }
+      setDrift(newDrift);
+      setVolatility(newVolatility);
+      onSimulationParams?.({
+        drift: (newDrift * 100).toFixed(3),
+        volatility: (newVolatility * 100).toFixed(3),
+        dt
+      });
+      setCompanyName(getRandomCompanyName());
+      setStartDate(new Date('2025-01-01'));
+      const initialSimData = Array.from({ length: numSims }, () => [100]);
+      setSimData(initialSimData);
+      setTime(0);
+      setHasStarted(true);
+      setEventMarkers([]);
+    }
+    setRunning(true);
+  };
+
+  const stopSimulation = () => {
+    setRunning(false);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  };
+
+  const resetSimulation = () => {
+    stopSimulation();
+    const newStart = parseFloat((Math.random() * 40 + 80).toFixed(2));
+    const resetData = Array.from({ length: numSims }, () => [newStart]);
+    setSimData(resetData);
+    setTime(0);
+    setDrift(0);
+    setVolatility(0);
+    setHasStarted(false);
+    onSimulationParams?.({ drift: '-', volatility: '-', dt });
+    onUpdateLastShock?.(0);
+    setCompanyName(getRandomCompanyName());
+    setStartDate(new Date('2025-01-01'));
+    setEventMarkers([]);
+  };
+
+  const handleAdvance = (days) => {
+    if (!hasStarted) return;
+    let newTime = time;
+    setSimData(prevData =>
+      prevData.map(sim => {
+        let newSim = [...sim];
+        for (let i = 0; i < days; i++) {
+          const lastVal = newSim[newSim.length - 1];
+          const newVal = lastVal * Math.exp(
+            (drift - 0.5 * volatility * volatility) * dt +
+            volatility * Math.sqrt(dt) * randomNormal()
+          );
+          newSim.push(newVal);
+          newTime++;
+          checkRecurringEvents(newTime);
+        }
+        return newSim;
+      })
+    );
+    setTime(newTime);
+  };
+
+  const checkRecurringEvents = useCallback((currentTime) => {
+    if (recurringEventConfig) {
+      const freqMap = { '1Q': 63, '1Y': 252, '5Y': 1260 };
+      let triggered = false;
+      for (const freq in recurringEventConfig.frequencies) {
+        if (recurringEventConfig.frequencies[freq] && currentTime % freqMap[freq] === 0 && currentTime !== 0) {
+          triggered = true;
+          break;
+        }
+      }
+      if (triggered) {
+        if (recurringEventConfig.mode === "random") {
+          const { drift: newDrift, volatility: newVolatility } = getRandomVariables();
+          setDrift(newDrift);
+          setVolatility(newVolatility);
+          onSimulationParams?.({
+            drift: (newDrift * 100).toFixed(3),
+            volatility: (newVolatility * 100).toFixed(3),
+            dt
+          });
+          setEventMarkers(prev => [...prev, { time: currentTime, drift: newDrift }]);
+        } else {
+          const newDrift = parseFloat(recurringEventConfig.customDrift) / 100;
+          const newVolatility = parseFloat(recurringEventConfig.customVolatility) / 100;
+          setDrift(newDrift);
+          setVolatility(newVolatility);
+          onSimulationParams?.({
+            drift: (newDrift * 100).toFixed(3),
+            volatility: (newVolatility * 100).toFixed(3),
+            dt
+          });
+          setEventMarkers(prev => [...prev, { time: currentTime, drift: newDrift }]);
+        }
+      }
+    }
+  }, [recurringEventConfig, onSimulationParams, dt]);
+
+  useEffect(() => {
+    if (running) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(() => {
+        setSimData(prevData =>
+          prevData.map(sim => {
+            const lastVal = sim[sim.length - 1];
+            const newVal = lastVal * Math.exp(
+              (drift - 0.5 * volatility * volatility) * dt +
+              volatility * Math.sqrt(dt) * randomNormal()
+            );
+            return [...sim, newVal];
+          })
+        );
+        setTime(prev => {
+          const newTime = prev + 1;
+          checkRecurringEvents(newTime);
+          return newTime;
+        });
+      }, 1000 / speed);
+    } else if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [running, speed, drift, volatility, checkRecurringEvents]);
+
+  useEffect(() => {
+    onUpdateData?.(simData);
+  }, [simData, onUpdateData]);
+
+  // Compute displayed simulation data.
+  const getDisplayedData = () => {
+    const fullLength = simData[0].length;
+    const mapping = { '1Q': 63, '1Y': 252, '5Y': 1260, 'ALL': fullLength };
+    const sliceDays = mapping[timeFrame] || fullLength;
+    const startIdx = fullLength > sliceDays ? fullLength - sliceDays : 0;
+    const displayedSimData = simData.map(sim => sim.slice(startIdx));
+    return { displayedSimData, startIndex: startIdx };
+  };
+  const { displayedSimData, startIndex } = getDisplayedData();
+
+  // Build quarter ticks.
+  const quarterTicks = [];
+  for (let i = 0; i < displayedSimData[0].length; i += 63) {
+    quarterTicks.push(i);
+  }
+  if (quarterTicks[quarterTicks.length - 1] !== displayedSimData[0].length - 1) {
+    quarterTicks.push(displayedSimData[0].length - 1);
+  }
+
+  // Build event marker arrays with color.
+  const eventMarkerRadiusArr = [];
+  const eventMarkerStyleArr = [];
+  const eventMarkerRotationArr = [];
+  const eventMarkerColorArr = [];
+  for (let i = 0; i < displayedSimData[0].length; i++) {
+    const globalIndex = i + startIndex;
+    const event = eventMarkers.find(e => e.time === globalIndex);
+    if (event) {
+      eventMarkerRadiusArr.push(10);
+      eventMarkerStyleArr.push('triangle');
+      // Use "< 0" so that if drift is negative, rotate 180 degrees and color red;
+      // otherwise, 0° and color green.
+      eventMarkerRotationArr.push(event.drift < 0 ? 180 : 0);
+      eventMarkerColorArr.push(event.drift < 0 ? 'red' : 'green');
+    } else {
+      eventMarkerRadiusArr.push(0);
+      eventMarkerStyleArr.push('circle');
+      eventMarkerRotationArr.push(0);
+      eventMarkerColorArr.push('transparent');
+    }
+  }
+
+  // Dynamic x-axis range.
+  const totalDays = simData[0].length;
+  const xMin = totalDays > ({ '1Q': 63, '1Y': 252, '5Y': 1260 }[timeFrame] || totalDays)
+    ? totalDays - ({ '1Q': 63, '1Y': 252, '5Y': 1260 }[timeFrame] || totalDays)
+    : 0;
+  const xMax = totalDays - 1;
+
+  // Custom x-axis tick callback.
+  const chartTickCallback = (value) => {
+    const qticks = [];
+    for (let i = 0; i < displayedSimData[0].length; i += 63) {
+      qticks.push(i);
+    }
+    if (qticks[qticks.length - 1] !== displayedSimData[0].length - 1) {
+      qticks.push(displayedSimData[0].length - 1);
+    }
+    if (qticks.includes(value)) {
+      const conversionFactor = 365 / 252;
+      const offset = Math.round(value * conversionFactor);
+      const date = new Date(startDate);
+      date.setDate(startDate.getDate() + offset);
+      return getQuarterLabel(date);
+    }
+    return "";
+  };
+
+  const chartOptions = {
+    animation: { duration: 0 },
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: true, labels: { color: darkMode ? '#eee' : '#333' } },
+      tooltip: { enabled: false }
+    },
+    scales: {
+      x: {
+        display: true,
+        min: xMin,
+        max: xMax,
+        title: { display: true, text: 'Trading Date', color: darkMode ? '#eee' : '#333' },
+        grid: { display: false },
+        ticks: {
+          autoSkip: false,
+          color: darkMode ? '#eee' : '#333',
+          callback: chartTickCallback
+        }
+      },
+      y: {
+        display: true,
+        title: { display: true, text: 'Stock Price', color: darkMode ? '#eee' : '#333' },
+        grid: { display: true, color: darkMode ? '#555' : '#ccc' },
+        ticks: {
+          autoSkip: false,
+          maxTicksLimit: 22,
+          color: darkMode ? '#eee' : '#333'
+        }
+      }
+    }
+  };
+
+  const finalChartData = {
+    labels: displayedSimData[0].map((_, idx) => idx),
+    datasets: displayedSimData.map((sim, i) => ({
+      label: `Sim ${i + 1}`,
+      data: sim,
+      borderColor: defaultColors[i] || '#' + Math.floor(Math.random() * 16777215).toString(16),
+      hidden: !visibleSims[i],
+      fill: false,
+      tension: 0.1,
+      pointRadius: eventMarkerRadiusArr,
+      pointStyle: eventMarkerStyleArr,
+      pointRotation: eventMarkerRotationArr,
+      pointHoverRadius: eventMarkerRadiusArr,
+      pointBackgroundColor: eventMarkerColorArr
+    }))
+  };
+
+  const handleChartRef = (chart) => {
+    chartRef.current = chart;
+  };
+
+  const currentTradingDate = formatTradingDateFrom(startDate, totalDays - 1);
+
+  return (
+    <div style={{ width: '100%', minHeight: '600px', position: 'relative' }}>
+      {/* Control Panel */}
+      <div style={{
+        marginBottom: '10px',
+        padding: '5px',
+        backgroundColor: darkMode ? 'rgba(34,34,34,0.9)' : 'rgba(255,255,255,0.9)',
+        borderRadius: '5px',
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: '15px',
+        justifyContent: 'flex-start'
+      }}>
+        <div style={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+          {companyName} – {currentTradingDate}
+        </div>
+        {nextEarningsCallDays !== null && (
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: darkMode ? '#ff0' : '#f00' }}>
+            Next Earnings Call in: {nextEarningsCallDays} day{nextEarningsCallDays === 1 ? '' : 's'}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '5px', whiteSpace: 'nowrap' }}>
+          <button onClick={() => setTimeFrame('ALL')}>All</button>
+        </div>
+        {!running && (
+          <div style={{ display: 'flex', gap: '5px', whiteSpace: 'nowrap' }}>
+            <label>
+              <input type="radio" name="variableMode" value="random" checked={variableMode === "random"}
+                onChange={() => onVariableModeChange("random")} /> Random
+            </label>
+            <label>
+              <input type="radio" name="variableMode" value="custom" checked={variableMode === "custom"}
+                onChange={() => onVariableModeChange("custom")} /> Custom
+            </label>
+            <label>
+              Runs:
+              <select value={numSims} onChange={(e) => setNumSims(parseInt(e.target.value))} style={{ marginLeft: '3px' }}>
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={3}>3</option>
+                <option value={4}>4</option>
+                <option value={5}>5</option>
+              </select>
+            </label>
+          </div>
+        )}
+        {variableMode === "custom" && !running && (
+          <div style={{ display: 'flex', gap: '5px', whiteSpace: 'nowrap' }}>
+            <label>
+              Drift (%):
+              <input type="number" step="0.1" value={customDrift} onChange={(e) => setCustomDrift(e.target.value)}
+                style={{ width: '50px', marginLeft: '3px' }} />
+            </label>
+            <label>
+              Volatility (%):
+              <input type="number" step="0.1" value={customVolatility} onChange={(e) => setCustomVolatility(e.target.value)}
+                style={{ width: '50px', marginLeft: '3px' }} />
+            </label>
+          </div>
+        )}
+        {hasStarted && (
+          <div style={{ display: 'flex', gap: '5px', whiteSpace: 'nowrap' }}>
+            <button onClick={() => handleAdvance(63)}>Advance 1Q</button>
+            <button onClick={() => handleAdvance(252)}>Advance 1Y</button>
+            <button onClick={() => handleAdvance(252 * 5)}>Advance 5Y</button>
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', whiteSpace: 'nowrap' }}>
+          {running ? (
+            <button onClick={stopSimulation}>Stop</button>
+          ) : (
+            <button onClick={startSimulation}>{hasStarted ? "Resume" : "Start"}</button>
+          )}
+          <button onClick={resetSimulation}>Reset</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <label>Speed:</label>
+            <input
+              type="range"
+              min="1"
+              max="100"
+              value={speed}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+            />
+            <span>{speed}x</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '5px', whiteSpace: 'nowrap' }}>
+          <button onClick={handleRandomEvent}>Random Event</button>
+          <button onClick={handleCreateEvent}>Create Event</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', whiteSpace: 'nowrap' }}>
+          {/* Recurring Event Form */}
+          {showRecurringEventForm ? (
+            <div style={{ border: '1px solid', padding: '10px', borderRadius: '5px' }}>
+              <p>Recurring Event:</p>
+              <div>
+                <label>
+                  <input type="radio" value="random" checked={recurringEventMode === "random"}
+                    onChange={(e) => setRecurringEventMode(e.target.value)} /> Random
+                </label>
+                <label style={{ marginLeft: '10px' }}>
+                  <input type="radio" value="custom" checked={recurringEventMode === "custom"}
+                    onChange={(e) => setRecurringEventMode(e.target.value)} /> Custom
+                </label>
+              </div>
+              <div>
+                <label>
+                  <input type="checkbox" checked={recurringFrequencies['1Q']}
+                    onChange={(e) => setRecurringFrequencies({ ...recurringFrequencies, '1Q': e.target.checked })} /> 1Q
+                </label>
+                <label style={{ marginLeft: '10px' }}>
+                  <input type="checkbox" checked={recurringFrequencies['1Y']}
+                    onChange={(e) => setRecurringFrequencies({ ...recurringFrequencies, '1Y': e.target.checked })} /> 1Y
+                </label>
+                <label style={{ marginLeft: '10px' }}>
+                  <input type="checkbox" checked={recurringFrequencies['5Y']}
+                    onChange={(e) => setRecurringFrequencies({ ...recurringFrequencies, '5Y': e.target.checked })} /> 5Y
+                </label>
+              </div>
+              {recurringEventMode === "custom" && (
+                <div>
+                  <label>
+                    Drift (%):
+                    <input type="number" step="0.1" value={recurringCustomDrift}
+                      onChange={(e) => setRecurringCustomDrift(e.target.value)}
+                      style={{ width: '50px', marginLeft: '5px' }} />
+                  </label>
+                  <label style={{ marginLeft: '10px' }}>
+                    Volatility (%):
+                    <input type="number" step="0.1" value={recurringCustomVolatility}
+                      onChange={(e) => setRecurringCustomVolatility(e.target.value)}
+                      style={{ width: '50px', marginLeft: '5px' }} />
+                  </label>
+                </div>
+              )}
+              <button onClick={() => {
+                setRecurringEventConfig({
+                  mode: recurringEventMode,
+                  frequencies: recurringFrequencies,
+                  customDrift: recurringCustomDrift,
+                  customVolatility: recurringCustomVolatility
+                });
+                setShowRecurringEventForm(false);
+              }}>Set Recurring Event</button>
+              <button onClick={() => setShowRecurringEventForm(false)}>Cancel</button>
+            </div>
+          ) : (
+            <div>
+              {recurringEventConfig ? (
+                <div>
+                  <p>Recurring Event set: {recurringEventConfig.mode} mode, frequencies: {Object.keys(recurringEventConfig.frequencies).filter(freq => recurringEventConfig.frequencies[freq]).join(', ')}</p>
+                  <button onClick={() => setRecurringEventConfig(null)}>Clear Recurring Event</button>
+                </div>
+              ) : (
+                <button onClick={() => setShowRecurringEventForm(true)}>Recurring Event</button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Bottom Panel */}
+      <div style={{ marginTop: '10px', textAlign: 'center' }}>
+        <button onClick={() => setTimeFrame('1Q')} style={{ marginRight: '5px' }}>1Q</button>
+        <button onClick={() => setTimeFrame('1Y')} style={{ marginRight: '5px' }}>1Y</button>
+        <button onClick={() => setTimeFrame('5Y')} style={{ marginRight: '5px' }}>5Y</button>
+        <button onClick={() => setTimeFrame('ALL')}>All</button>
+        <button
+          onClick={() => {
+            const container = chartContainerRef.current;
+            if (!document.fullscreenElement) {
+              container.requestFullscreen().catch(err => console.error(err));
+            } else {
+              document.exitFullscreen();
+            }
+          }}
+          style={{ marginLeft: '10px' }}
+        >
+          Fullscreen
+        </button>
+      </div>
+      {/* Visibility Controls */}
+      <div style={{ marginTop: '10px', textAlign: 'center' }}>
+        {visibleSims.map((isVisible, i) => (
+          <label key={i} style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+            <div style={{ width: '15px', height: '15px', backgroundColor: defaultColors[i] || 'black' }} />
+            <input type="checkbox" checked={isVisible} onChange={(e) => {
+              const newVisible = [...visibleSims];
+              newVisible[i] = e.target.checked;
+              setVisibleSims(newVisible);
+            }} />
+            <span>Sim {i + 1}</span>
+          </label>
+        ))}
+      </div>
+      <div ref={chartContainerRef} style={{ width: '100%', height: '400px', position: 'relative', marginTop: '10px' }}>
+        <Line ref={handleChartRef} data={finalChartData} options={chartOptions} />
+      </div>
+      <SimulationsLegend displayedSimData={displayedSimData} darkMode={darkMode} defaultColors={defaultColors} />
+      <Dashboard data={simData} darkMode={darkMode} />
+      <p style={{ textAlign: 'center' }}>Elapsed Time: {time} trading day{time !== 1 ? 's' : ''}</p>
+    </div>
+  );
+};
+
+/* ------------------------- App Component ------------------------- */
+const App = () => {
+  const [simulationData, setSimulationData] = useState([]);
+  const [simulationParams, setSimulationParams] = useState({});
+  const [lastShock, setLastShock] = useState(0);
+  const [variableMode, setVariableMode] = useState("random");
+  const [revealed, setRevealed] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
+
+  return (
+    <div style={getPageStyle(darkMode)}>
+      <div style={{ padding: '20px', textAlign: 'right' }}>
+        <button onClick={() => setDarkMode(!darkMode)} style={{
+          backgroundColor: darkMode ? '#444' : '#ddd',
+          color: darkMode ? '#fff' : '#333',
+          border: 'none',
+          padding: '5px 10px',
+          borderRadius: '5px'
+        }}>
+          {darkMode ? "Light Mode" : "Dark Mode"}
+        </button>
+      </div>
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        margin: '0 auto',
+        padding: '20px',
+        maxWidth: '1200px',
+        fontFamily: 'Arial, sans-serif'
+      }}>
+        <div style={{ width: '350px', marginRight: '20px', flexShrink: 0 }}>
+          <SimulationParamDisplay
+            simulationParams={simulationParams}
+            lastShock={lastShock}
+            variableMode={variableMode}
+            revealed={revealed}
+            onReveal={() => setRevealed(true)}
+            darkMode={darkMode}
+          />
+          <Legend darkMode={darkMode} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <TradingSimulation
+            onUpdateData={setSimulationData}
+            onSimulationParams={setSimulationParams}
+            onUpdateLastShock={setLastShock}
+            variableMode={variableMode}
+            onVariableModeChange={(mode) => {
+              setVariableMode(mode);
+              setRevealed(false);
+            }}
+            darkMode={darkMode}
+          />
+          <Dashboard data={simulationData} darkMode={darkMode} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
