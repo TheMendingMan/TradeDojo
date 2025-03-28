@@ -1,0 +1,25 @@
+diff --git a/node_modules/framer-motion/dist/es/components/AnimatePresence/PopChild.mjs b/node_modules/framer-motion/dist/es/components/AnimatePresence/PopChild.mjs
+index fb4baf4..09d9923 100644
+--- a/node_modules/framer-motion/dist/es/components/AnimatePresence/PopChild.mjs
++++ b/node_modules/framer-motion/dist/es/components/AnimatePresence/PopChild.mjs
+@@ -1,6 +1,7 @@
+ "use client";
+ import { jsx } from 'react/jsx-runtime';
+-import * as React from 'react';
++import React from 'react';
++const { Component } = React;
+ import { useId, useRef, useContext, useInsertionEffect } from 'react';
+ import { MotionConfigContext } from '../../context/MotionConfigContext.mjs';
+ 
+diff --git a/node_modules/framer-motion/dist/es/components/AnimatePresence/utils.mjs b/node_modules/framer-motion/dist/es/components/AnimatePresence/utils.mjs
+index 6819aba..568e890 100644
+--- a/node_modules/framer-motion/dist/es/components/AnimatePresence/utils.mjs
++++ b/node_modules/framer-motion/dist/es/components/AnimatePresence/utils.mjs
+@@ -1,4 +1,6 @@
+-import { Children, isValidElement } from 'react';
++import React from 'react';
++const { Children } = React;
++
+ 
+ const getChildKey = (child) => child.key || "";
+ function onlyElements(children) {

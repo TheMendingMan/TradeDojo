@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
 import Papa from 'papaparse';
@@ -28,13 +27,15 @@ const TradingSimulation = ({
   const [speed, setSpeed] = useState(1);
   const [drift, setDrift] = useState(0.0002);
   const [volatility, setVolatility] = useState(0.01);
-  useEffect(() => {
-    onSimulationParams?.({ drift, volatility });
-  }, [drift, volatility]);  
+
   const [startDate] = useState(new Date('2025-01-01'));
   const [timeFrame, setTimeFrame] = useState('ALL');
   const quarterDuration = 63;
   const conversionFactor = 365 / 252;
+
+  useEffect(() => {
+    if (onSimulationParams) onSimulationParams({ drift, volatility });
+  }, [drift, volatility]);
 
   useEffect(() => {
     if (dataSource === 'real') {
@@ -45,11 +46,9 @@ const TradingSimulation = ({
           const allPrices = parsed.data
             .map(row => parseFloat(row['Close']))
             .filter(price => !isNaN(price));
-
           setRealPrices(allPrices);
           setSimData([[allPrices[0]]]);
           setTime(0);
-
         });
     }
   }, [dataSource, selectedTicker]);
@@ -88,7 +87,7 @@ const TradingSimulation = ({
   }, [running, time, speed, dataSource, realPrices, drift, volatility]);
 
   useEffect(() => {
-    onUpdateData?.(simData);
+    if (onUpdateData) onUpdateData(simData);
   }, [simData]);
 
   const currentSimDate = new Date(startDate);
@@ -174,34 +173,31 @@ const TradingSimulation = ({
             <button onClick={() => handleAdvance(quarterDuration)}>Advance 1Q</button>
             <button onClick={() => handleAdvance(252)}>Advance 1Y</button>
             <button onClick={() => handleAdvance(1260)}>Advance 5Y</button>
+            <div style={{ marginTop: '15px' }}>
+              <label>📉 Drift: {drift.toFixed(4)}</label>
+              <input
+                type="range"
+                min="-0.01"
+                max="0.01"
+                step="0.0001"
+                value={drift}
+                onChange={(e) => setDrift(parseFloat(e.target.value))}
+                style={{ width: '100%' }}
+              />
+              <br />
+              <label>⚡ Volatility: {volatility.toFixed(4)}</label>
+              <input
+                type="range"
+                min="0"
+                max="0.1"
+                step="0.0005"
+                value={volatility}
+                onChange={(e) => setVolatility(parseFloat(e.target.value))}
+                style={{ width: '100%' }}
+              />
+            </div>
           </>
         )}
-        {dataSource === 'random' && (
-      <div style={{ marginBottom: '15px' }}>
-        <label>📉 Drift: {drift.toFixed(4)}</label>
-        <input
-          type="range"
-          min="-0.01"
-          max="0.01"
-          step="0.0001"
-          value={drift}
-          onChange={(e) => setDrift(parseFloat(e.target.value))}
-          style={{ width: '100%' }}
-        />
-        <br />
-        <label>⚡ Volatility: {volatility.toFixed(4)}</label>
-        <input
-          type="range"
-          min="0"
-          max="0.1"
-          step="0.0005"
-          value={volatility}
-          onChange={(e) => setVolatility(parseFloat(e.target.value))}
-          style={{ width: '100%' }}
-        />
-      </div>
-    )}
-
       </div>
 
       <div style={{ height: '300px' }}>
